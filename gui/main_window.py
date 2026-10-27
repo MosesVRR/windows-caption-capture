@@ -2,6 +2,7 @@
 from pathlib import Path
 
 from PySide6.QtCore import Qt
+from capture.worker import CaptureWorker
 from PySide6.QtWidgets import (
     QInputDialog,
     QLabel,
@@ -30,6 +31,8 @@ class MainWindow(QMainWindow):
         self.sessions: list[dict] = []
         self.current_session_id: str | None = None
         self.saved_transcript = ""
+        self.capture_worker: CaptureWorker | None = None
+        self.active_capture_session_id: str | None = None
 
         self.setWindowTitle("Windows Caption Capture")
         self.resize(1100, 700)
@@ -49,6 +52,13 @@ class MainWindow(QMainWindow):
         self.refresh_button = QPushButton("Refresh")
         self.refresh_button.clicked.connect(self.refresh_sessions)
 
+        self.start_button = QPushButton("Start Recording")
+        self.start_button.clicked.connect(self.start_recording)
+
+        self.stop_button = QPushButton("Stop Recording")
+        self.stop_button.clicked.connect(self.stop_recording)
+        self.stop_button.setEnabled(False)
+
         self.rename_button = QPushButton("Rename Session")
         self.rename_button.clicked.connect(self.rename_selected_session)
 
@@ -65,6 +75,8 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(QLabel("Recording Sessions"))
         left_layout.addWidget(self.search_input)
         left_layout.addWidget(self.refresh_button)
+        left_layout.addWidget(self.start_button)
+        left_layout.addWidget(self.stop_button)
         left_layout.addWidget(self.rename_button)
         left_layout.addWidget(self.delete_button)
         left_layout.addWidget(self.session_list)
@@ -116,6 +128,71 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Ready")
 
         self.update_editor_state()
+
+    def start_recording(self) -> None:
+        """Start caption capture in a background thread."""
+        if self.capture_worker is not None and self.capture_worker.isRunning():
+            return
+
+        self.capture_worker = CaptureWorker()
+        self.capture_worker.recording_started.connect(self.on_recording_started)
+        self.capture_worker.capture_error.connect(self.on_capture_error)
+        self.capture_worker.status_update.connect(self.statusBar().showMessage)
+        self.capture_worker.recording_finished.connect(self.on_recording_finished)
+
+        self.start_button.setEnabled(False)
+        self.stop_button.setEnabled(True)
+        self.transcript_viewer.setReadOnly(True)
+        self.rename_button.setEnabled(False)
+        self.delete_button.setEnabled(False)
+        self.session_list.setEnabled(False)
+        self.statusBar().showMessage("Starting caption capture...")
+
+        self.capture_worker.start()
+
+    def stop_recording(self) -> None:
+        """Request that the active capture worker stop."""
+        if self.capture_worker is None or not self.capture_worker.isRunning():
+            return
+
+        self.stop_button.setEnabled(False)
+        self.statusBar().showMessage("Stopping caption capture...")
+        self.capture_worker.stop()
+
+    def on_recording_started(self, session_id: str, session_path: str) -> None:
+        """Update the interface when a new recording session is created."""
+        self.active_capture_session_id = session_id
+        self.statusBar().showMessage(f"Recording captions: {session_path}")
+
+    def on_capture_error(self, message: str) -> None:
+        """Display a capture error reported by the worker."""
+        self.statusBar().showMessage(message)
+        QMessageBox.warning(self, "Caption capture", message)
+
+    def on_recording_finished(self, session_id: str, status: str) -> None:
+        """Restore controls and refresh history after capture ends."""
+        self.start_button.setEnabled(True)
+        self.stop_button.setEnabled(False)
+        self.transcript_viewer.setReadOnly(False)
+        self.rename_button.setEnabled(True)
+        self.delete_button.setEnabled(True)
+        self.session_list.setEnabled(True)
+        self.active_capture_session_id = None
+
+        # The worker has finished writing files, so it is now safe to reload.
+        self.refresh_sessions()
+
+        if session_id:
+            for row in range(self.session_list.count()):
+                item = self.session_list.item(row)
+                if item.data(Qt.ItemDataRole.UserRole) == session_id:
+                    self.session_list.setCurrentItem(item)
+                    break
+
+        self.statusBar().showMessage(
+            "Recording finished." if status == "completed"
+            else f"Recording ended with status: {status}"
+        )
 
     def update_editor_state(self) -> None:
         """Enable or disable editor controls according to unsaved changes."""
@@ -518,8 +595,31 @@ class MainWindow(QMainWindow):
         self.update_editor_state()
 
     def closeEvent(self, event) -> None:
-        """Prevent closing with unsaved changes without confirmation."""
-        if self.confirm_unsaved_changes():
-            event.accept()
-        else:
+        """Stop active capture safely before closing the application."""
+        if not self.confirm_unsaved_changes():
             event.ignore()
+            return
+
+        if self.capture_worker is not None and self.capture_worker.isRunning():
+            answer = QMessageBox.question(
+                self,
+                "Recording in progress",
+                "A recording is in progress. Stop it and close the application?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                event.ignore()
+                return
+            self.capture_worker.stop()
+            self.capture_worker.wait(3000)
+            if self.capture_worker.isRunning():
+                QMessageBox.warning(
+                    self,
+                    "Capture still stopping",
+                    "Caption capture is still stopping. Please try closing again.",
+                )
+                event.ignore()
+                return
+
+        event.accept()
