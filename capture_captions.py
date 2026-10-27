@@ -4,6 +4,7 @@ from pathlib import Path
 
 from pywinauto import Desktop
 
+from capture.transcript import find_new_text
 
 # Configuration
 POLL_INTERVAL = 0.5
@@ -23,41 +24,6 @@ def get_caption_text(window):
             continue
 
     return ""
-
-
-def find_new_text(previous, current):
-    """
-    Identify text added to the end of a changing caption snapshot.
-
-    Handles both cumulative captions and snapshots where older text
-    has scrolled out of view.
-    """
-
-    if not current:
-        return ""
-
-    if not previous:
-        return current
-
-    if current == previous:
-        return ""
-
-    # The current snapshot extends the previous snapshot.
-    if current.startswith(previous):
-        return current[len(previous):]
-
-    # Search for the longest overlap between the end of the previous
-    # snapshot and the beginning of the current snapshot.
-    max_overlap = min(len(previous), len(current))
-
-    for size in range(max_overlap, 0, -1):
-        if previous[-size:] == current[:size]:
-            return current[size:]
-
-    # No overlap was found. Preserve the new snapshot rather than
-    # silently losing potentially important text.
-    return "\n" + current
-
 
 def main():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
