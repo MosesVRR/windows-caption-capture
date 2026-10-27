@@ -1,14 +1,14 @@
-"""Capture text exposed by the Windows Live Captions interface."""
+"""Capture Windows Live Captions into organized recording sessions."""
 
 import time
 from datetime import datetime
-from pathlib import Path
 
 from pywinauto import Desktop
 
+from capture.session import CaptureSession
+
 
 POLL_INTERVAL = 0.5
-OUTPUT_DIR = Path("transcripts")
 
 
 def get_caption_text(window) -> str:
@@ -29,14 +29,15 @@ def find_captions_window():
         title="Live Captions",
         class_name="LiveCaptionsDesktopWindow",
     )
+
     if not window.exists():
         return None
+
     return window
 
 
 def main() -> None:
-    """Capture captions into a new transcript session."""
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    """Capture captions and save them as a managed session."""
     window = find_captions_window()
 
     if window is None:
@@ -44,26 +45,26 @@ def main() -> None:
         print("Open Live Captions and run this script again.")
         return
 
-    session_id = datetime.now().astimezone().strftime("%Y-%m-%d_%H-%M-%S_%f")
-    transcript_file = OUTPUT_DIR / f"{session_id}_transcript.txt"
-    snapshots_file = OUTPUT_DIR / f"{session_id}_snapshots.txt"
+    session = CaptureSession()
 
-    # Use the currently visible text as a baseline to avoid copying
-    # existing caption history into the new transcript.
+    # Establish the initial baseline to avoid writing existing caption
+    # history until the next caption change.
     previous_text = get_caption_text(window)
 
     print("=" * 60)
     print("WINDOWS LIVE CAPTIONS SAVER")
     print("=" * 60)
-    print(f"Transcript: {transcript_file.resolve()}")
-    print(f"Snapshots:  {snapshots_file.resolve()}")
-    print("Existing visible captions will be used as the starting baseline.")
+    print(f"Session ID: {session.session_id}")
+    print(f"Session folder: {session.session_dir.resolve()}")
+    print(f"Transcript: {session.transcript_file.resolve()}")
+    print(f"Snapshots: {session.snapshots_file.resolve()}")
+    print(f"Metadata: {session.metadata_file.resolve()}")
     print("Capturing new caption changes. Press Ctrl+C to stop.\n")
 
     try:
         with (
-            transcript_file.open("w", encoding="utf-8") as transcript,
-            snapshots_file.open("w", encoding="utf-8") as snapshots,
+            session.transcript_file.open("w", encoding="utf-8") as transcript,
+            session.snapshots_file.open("w", encoding="utf-8") as snapshots,
         ):
             while True:
                 try:
@@ -80,9 +81,9 @@ def main() -> None:
                         )
                         snapshots.flush()
 
-                        # Save the latest complete caption snapshot.
-                        # Overwriting prevents older text from being
-                        # appended repeatedly.
+                        # Windows exposes the accumulated caption history.
+                        # Replace the transcript with the latest complete
+                        # snapshot to avoid duplicating earlier captions.
                         transcript.seek(0)
                         transcript.write(current_text)
                         transcript.truncate()
@@ -105,8 +106,10 @@ def main() -> None:
         print("\n\nCapture stopped.")
 
     finally:
-        print(f"Transcript saved to: {transcript_file.resolve()}")
-        print(f"Snapshots saved to: {snapshots_file.resolve()}")
+        session.finish(status="completed")
+        print(f"Transcript saved to: {session.transcript_file.resolve()}")
+        print(f"Snapshots saved to: {session.snapshots_file.resolve()}")
+        print(f"Metadata saved to: {session.metadata_file.resolve()}")
 
 
 if __name__ == "__main__":

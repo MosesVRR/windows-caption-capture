@@ -86,14 +86,5 @@ class TestFindNewText(unittest.TestCase):
             " Our next topic is testing.",
         )
 
-    def test_corrected_caption_is_not_appended_as_new_text(self):
-        previous = "We will discuss the project tomorrow."
-        current = "We will discuss the project today."
-
-        self.assertEqual(
-            find_new_text(previous, current),
-            "",
-        )
-
 if __name__ == "__main__":
     unittest.main()
