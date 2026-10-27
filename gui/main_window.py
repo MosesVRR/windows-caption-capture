@@ -2,6 +2,7 @@
 from pathlib import Path
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QTextCursor
 from capture.worker import CaptureWorker
 from PySide6.QtWidgets import (
     QInputDialog,
@@ -134,11 +135,16 @@ class MainWindow(QMainWindow):
         if self.capture_worker is not None and self.capture_worker.isRunning():
             return
 
+        # Avoid starting a capture while there are unsaved manual edits.
+        if not self.confirm_unsaved_changes():
+            return
+
         self.capture_worker = CaptureWorker()
         self.capture_worker.recording_started.connect(self.on_recording_started)
         self.capture_worker.capture_error.connect(self.on_capture_error)
         self.capture_worker.status_update.connect(self.statusBar().showMessage)
         self.capture_worker.recording_finished.connect(self.on_recording_finished)
+        self.capture_worker.transcript_update.connect(self.on_transcript_update)
 
         self.start_button.setEnabled(False)
         self.stop_button.setEnabled(True)
@@ -160,9 +166,33 @@ class MainWindow(QMainWindow):
         self.capture_worker.stop()
 
     def on_recording_started(self, session_id: str, session_path: str) -> None:
-        """Update the interface when a new recording session is created."""
+        """Show the new session in the list as soon as recording starts."""
         self.active_capture_session_id = session_id
+        self.refresh_sessions()
+
+        # Select the newly created session so its live transcript is visible.
+        for row in range(self.session_list.count()):
+            item = self.session_list.item(row)
+            if item.data(Qt.ItemDataRole.UserRole) == session_id:
+                self.session_list.setCurrentItem(item)
+                break
+
         self.statusBar().showMessage(f"Recording captions: {session_path}")
+
+    def on_transcript_update(self, transcript: str) -> None:
+        """Display live text for the currently recording session."""
+        if not self.active_capture_session_id:
+            return
+        if self.current_session_id != self.active_capture_session_id:
+            return
+
+        self.transcript_viewer.blockSignals(True)
+        self.transcript_viewer.setPlainText(transcript)
+        self.transcript_viewer.moveCursor(QTextCursor.MoveOperation.End)
+        self.transcript_viewer.blockSignals(False)
+        # Live capture updates are not manual edits and should not be marked dirty.
+        self.saved_transcript = transcript
+        self.update_editor_state()
 
     def on_capture_error(self, message: str) -> None:
         """Display a capture error reported by the worker."""
