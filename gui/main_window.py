@@ -52,6 +52,9 @@ class MainWindow(QMainWindow):
         self.rename_button = QPushButton("Rename Session")
         self.rename_button.clicked.connect(self.rename_selected_session)
 
+        self.delete_button = QPushButton("Delete Session")
+        self.delete_button.clicked.connect(self.delete_selected_session)
+
         self.session_list = QListWidget()
         self.session_list.currentItemChanged.connect(
             self.on_session_selected
@@ -63,6 +66,7 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(self.search_input)
         left_layout.addWidget(self.refresh_button)
         left_layout.addWidget(self.rename_button)
+        left_layout.addWidget(self.delete_button)
         left_layout.addWidget(self.session_list)
 
         self.session_title = QLabel("Select a session")
@@ -436,6 +440,66 @@ class MainWindow(QMainWindow):
 
         self.refresh_sessions()
         self.statusBar().showMessage(f"Session renamed to: {new_name}")
+
+    def delete_selected_session(self) -> None:
+        """Delete the selected session after explicit confirmation."""
+        item = self.session_list.currentItem()
+
+        if item is None:
+            QMessageBox.information(
+                self,
+                "No session selected",
+                "Select a session before deleting it.",
+            )
+            return
+
+        if not self.confirm_unsaved_changes():
+            return
+
+        session_id = item.data(Qt.ItemDataRole.UserRole)
+        session = self.history.get_session(session_id)
+
+        if session is None:
+            QMessageBox.warning(
+                self,
+                "Session not found",
+                "This session could not be found. Try refreshing the list.",
+            )
+            return
+
+        session_name = session.get("name") or session_id
+
+        answer = QMessageBox.question(
+            self,
+            "Delete Session",
+            f"Permanently delete '{session_name}' and all its files?\n\n"
+            "This action cannot be undone.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            self.history.delete_session(session_id)
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(
+                self,
+                "Delete failed",
+                f"Could not delete this session:\n{exc}",
+            )
+            return
+
+        # Clear the deleted session before refreshing the list.
+        self.session_list.blockSignals(True)
+        self.session_list.clearSelection()
+        self.session_list.setCurrentRow(-1)
+        self.session_list.blockSignals(False)
+
+        self.clear_selected_session()
+        self.refresh_sessions()
+        self.statusBar().showMessage(f"Deleted session: {session_name}")
 
     def clear_selected_session(self) -> None:
         """Clear the transcript panel when no session is selected."""
