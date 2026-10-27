@@ -1,57 +1,69 @@
+"""Capture text exposed by the Windows Live Captions interface."""
+
 import time
 from datetime import datetime
 from pathlib import Path
 
 from pywinauto import Desktop
 
-from capture.transcript import find_new_text
 
-# Configuration
 POLL_INTERVAL = 0.5
 OUTPUT_DIR = Path("transcripts")
-TRANSCRIPT_FILE = OUTPUT_DIR / "transcript.txt"
-SNAPSHOT_FILE = OUTPUT_DIR / "snapshots.txt"
 
 
-def get_caption_text(window):
-    """Read the current caption text through Windows UI Automation."""
-
+def get_caption_text(window) -> str:
+    """Read the current caption text from Windows UI Automation."""
     for element in window.descendants():
         try:
             if element.element_info.automation_id == "CaptionsTextBlock":
                 return element.element_info.name or ""
         except Exception:
             continue
-
     return ""
 
-def main():
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
+def find_captions_window():
+    """Return the Live Captions window if it can be found."""
     desktop = Desktop(backend="uia")
     window = desktop.window(
         title="Live Captions",
         class_name="LiveCaptionsDesktopWindow",
     )
-
     if not window.exists():
-        print("Live Captions was not found.")
+        return None
+    return window
+
+
+def main() -> None:
+    """Capture captions into a new transcript session."""
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    window = find_captions_window()
+
+    if window is None:
+        print("Windows Live Captions was not found.")
         print("Open Live Captions and run this script again.")
         return
 
-    previous_text = ""
+    session_id = datetime.now().astimezone().strftime("%Y-%m-%d_%H-%M-%S_%f")
+    transcript_file = OUTPUT_DIR / f"{session_id}_transcript.txt"
+    snapshots_file = OUTPUT_DIR / f"{session_id}_snapshots.txt"
+
+    # Use the currently visible text as a baseline to avoid copying
+    # existing caption history into the new transcript.
+    previous_text = get_caption_text(window)
 
     print("=" * 60)
     print("WINDOWS LIVE CAPTIONS SAVER")
     print("=" * 60)
-    print(f"Transcript: {TRANSCRIPT_FILE.resolve()}")
-    print(f"Snapshots:  {SNAPSHOT_FILE.resolve()}")
-    print("\nCapturing captions. Press Ctrl+C to stop.\n")
+    print(f"Transcript: {transcript_file.resolve()}")
+    print(f"Snapshots:  {snapshots_file.resolve()}")
+    print("Existing visible captions will be used as the starting baseline.")
+    print("Capturing new caption changes. Press Ctrl+C to stop.\n")
 
     try:
         with (
-            TRANSCRIPT_FILE.open("w", encoding="utf-8") as transcript,
-            SNAPSHOT_FILE.open("w", encoding="utf-8") as snapshots,
+            transcript_file.open("w", encoding="utf-8") as transcript,
+            snapshots_file.open("w", encoding="utf-8") as snapshots,
         ):
             while True:
                 try:
@@ -62,25 +74,27 @@ def main():
                             timespec="seconds"
                         )
 
-                        # Preserve each distinct snapshot for debugging
-                        # and possible future transcript reconstruction.
+                        # Keep a history of snapshots for diagnostics.
                         snapshots.write(
-                            f"\n[{timestamp}]\n{current_text}\n"
+                            f"[{timestamp}]\n{current_text}\n\n"
                         )
                         snapshots.flush()
 
-                        new_text = find_new_text(
-                            previous_text,
-                            current_text,
-                        )
-
-                        if new_text:
-                            transcript.write(new_text)
-                            transcript.flush()
-
-                            print(new_text, end="", flush=True)
+                        # Save the latest complete caption snapshot.
+                        # Overwriting prevents older text from being
+                        # appended repeatedly.
+                        transcript.seek(0)
+                        transcript.write(current_text)
+                        transcript.truncate()
+                        transcript.flush()
 
                         previous_text = current_text
+
+                        print(
+                            f"\rCaptured {len(current_text)} characters...",
+                            end="",
+                            flush=True,
+                        )
 
                 except Exception as exc:
                     print(f"\nTemporary capture error: {exc}")
@@ -89,8 +103,10 @@ def main():
 
     except KeyboardInterrupt:
         print("\n\nCapture stopped.")
-        print(f"Transcript saved to: {TRANSCRIPT_FILE.resolve()}")
-        print(f"Snapshots saved to: {SNAPSHOT_FILE.resolve()}")
+
+    finally:
+        print(f"Transcript saved to: {transcript_file.resolve()}")
+        print(f"Snapshots saved to: {snapshots_file.resolve()}")
 
 
 if __name__ == "__main__":
